@@ -67,6 +67,16 @@
 #define LCD_PINS_ENABLE                       17  // ST9720 DAT
 #define LCD_PINS_D4                           30  // ST9720 CLK
 
+
+#if ENABLED(MSU)
+  #ifndef SERVO0_PIN
+    #define SERVO0_PIN                        27
+  #endif
+  #if SERVO0_PIN == BEEPER_PIN
+    #undef BEEPER_PIN
+  #endif
+#endif
+
 #if ENABLED(BLTOUCH)
   #ifndef SERVO0_PIN
     #define SERVO0_PIN                        27
