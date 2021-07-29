@@ -16,43 +16,46 @@
   #include "../../module/servo.h"
 #endif
 
-float idlerPosition; //stores the idler position in mm
-float offsetEndstopTo1 = 3.9;//space from the endstop to the first bearing position(Filament 1)
-float spaceBetweenBearings = 3;//space in between each bearing
-float servopos1=20;//first bearing position
-float servobearingangle=25;//space between each bearings
-float parkedPosition = 0; //this is the parked position. when using the servo it will be the parked position in degree
-float absolutePosition;  //used to represent the position in mm where the idler aligns with the correct filament
-float storeExtruderPosition; //used to store the extruder position before the tool change so that we are able to reset everything.
+float idlerPosition;
+
+float offsetEndstopTo1 = 3.9;
+float spaceBetweenBearings = 3;
+
+float servopos1=20;
+float servobearingangle=26;
+
+float absolutePosition;
+float storeExtruderPosition; 
 float bowdenTubeLength = MSU_BOWDEN_TUBE_SETUP_LENGTH;
 float nozzleExtruderGearLength = MSU_NOZZLE_EXTRUDER_GEAR_LENGTH;
 
-int SelectedFilamentNbr = 0;
+int SelectedFilamentNbr = -1;
 
-bool idlerEngaged = true;//idler engaged or not, this is used in direct drive setup with the MSU disengaging and letting the extruder do everything
+bool idlerEngaged = true;
 bool idlerHomed=false;
-bool changingFilament=false;//keeps track of whether the MSU is performing a tool change or not. Will be used to trigger loading failure correction
 
+//filament loading status, used for error handling
+bool changingFilament=false;
+bool loadingFilament=false;
+bool unloadingFilament=false;
+bool homingIdler=false;
 
-bool loading=false;
-bool unloading=false;
+xyze_pos_t position;
 
-
-bool homingIdler=false;//homing status used in the homing sequence, but will also be useful in order to disable the bug where the idler won't move if the nozzle is cold(prevent cold extrusion feature)
-xyze_pos_t position;//we have to create a fake destination(x,y,z) when doing our MSU moves in order to be able to apply motion limits. We then apply the extruder movement we want to that
-
-
+float steps_per_mm_correction_factor =1;
 #if ENABLED(MSU_DIRECT_DRIVE_LINKED_EXTRUDER_SETUP)
-  double steps_per_mm_correction_factor = MSU_EXTRUDER_STEPS_PER_MM / planner.settings.axis_steps_per_mm[E_AXIS_N(MSU_EXTRUDER_ENBR)];
-#else
-  double steps_per_mm_correction_factor = 1;
+  float msusteps = MSU_EXTRUDER_STEPS_PER_MM;
+  float steps;
 #endif
 
-
-
 void MSUMP::tool_change(uint8_t index)
-{ changingFilament=true;
-  SelectedFilamentNbr = index;
+
+{
+  #if ENABLED (MSU_DIRECT_DRIVE_LINKED_EXTRUDER_SETUP)
+  steps = static_cast<float>(planner.settings.axis_steps_per_mm[E_AXIS]);
+  steps_per_mm_correction_factor =  msusteps /steps;
+  #endif
+  changingFilament=true;
 
   #ifdef MSU_DIRECT_DRIVE_SETUP
     if(!idlerEngaged)
@@ -96,6 +99,8 @@ void MSUMP::tool_change(uint8_t index)
   planner.position.resetExtruder();
   planner.synchronize();
 
+  idler_select_filament_nbr(SelectedFilamentNbr);//get idler back into position to completly extract
+
   #endif //MSU_DIRECT_DRIVE_LINKED_EXTRUDER_SETUP
 
 
@@ -109,6 +114,7 @@ void MSUMP::tool_change(uint8_t index)
 
 
   idler_select_filament_nbr(index);
+  SelectedFilamentNbr = index;
   
 
   //reload the new filament up to the nozzle/extruder gear if running a direct drive setup
@@ -135,9 +141,11 @@ void MSUMP::tool_change(uint8_t index)
     planner.buffer_line(position, 10, MSU_EXTRUDER_ENBR);
     planner.position.resetExtruder();
 
+    //disengage idler
+    idler_select_filament_nbr(-1);
     //finish loading
     position.e=nozzleExtruderGearLength*steps_per_mm_correction_factor;
-    planner.buffer_line(position, 10, MSU_EXTRUDER_ENBR);//two extruder moves at the same time: needs testing
+    planner.buffer_line(position, 10, MSU_EXTRUDER_ENBR);
     planner.synchronize();
    
   #endif //MSU_DIRECT_DRIVE_LINKED_EXTRUDER_SETUP
@@ -157,6 +165,7 @@ void MSUMP::tool_change(uint8_t index)
   idlerPosition = absolutePosition;
   planner.position.e = storeExtruderPosition;
   changingFilament=false;
+  
 }
 
 
@@ -182,7 +191,7 @@ void MSUMP::idler_select_filament_nbr(int index)
 //homing sequence of the idler. If this is called when using the servo motor it will initiate it
 
 void MSUMP::idler_home()
-{ 
+{
   #if ENABLED(MSU_SERVO_IDLER)
     msu.idler_servo_init();
   #else
@@ -231,6 +240,8 @@ void MSUMP::move_msu_extruder(const float diff){
 }
 void MSUMP::filament_runout(){
   //TODO error handling for filament runout when the MSU is loading/unloading filament
+  if(loadingFilament)error_on_load();
+  if(unloadingFilament)error_on_unload();
   
 }
 
